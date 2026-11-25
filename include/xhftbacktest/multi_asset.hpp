@@ -6,9 +6,10 @@
 
 namespace xhftbacktest {
 
-template<class QueueModel, class LatencyModel, std::size_t Cap = 4096>
+template<class QueueModel, class LatencyModel, std::size_t Cap = 4096,
+         class FillModel = NoPartialFill, class AssetMode = LinearAssetMode>
 class MultiAssetBacktest {
-    using Asset = Backtest<QueueModel, LatencyModel, Cap>;
+    using Asset = Backtest<QueueModel, LatencyModel, Cap, FillModel, AssetMode>;
     using Time = std::int64_t;
     std::vector<Asset> assets_;
     Time current_ts_ = detail::never;
@@ -111,19 +112,30 @@ public:
         return assets_[i].submit_sell_order(id, px, qty, tif);
     }
     bool cancel(std::size_t i, std::uint64_t id) noexcept { return assets_[i].cancel(id); }
+    bool modify(std::size_t i, std::uint64_t id, double price, double qty) noexcept {
+        return assets_[i].modify(id, price, qty);
+    }
+    double equity(std::size_t i, double mark_price) const noexcept { return assets_[i].equity(mark_price); }
+    void apply_funding(std::size_t i, double funding_rate, double mark_price) noexcept {
+        assets_[i].apply_funding(funding_rate, mark_price);
+    }
     void clear_inactive_orders(std::size_t i) noexcept { assets_[i].clear_inactive_orders(); }
 
-    // Mid-marked linear contracts in a common quote currency, net of fees.
+    // Mid-marked contracts in a common settlement currency, net of fees.
     double total_equity() const noexcept {
         double total = 0.0;
         for (const auto& a : assets_) {
+            const auto mid = [&] { return 0.5 * (a.depth().best_bid() + a.depth().best_ask()); };
             const auto& s = a.state_values();
-            double value = s.balance;
-            if (s.position != 0.0) {
-                const double mid = 0.5 * (a.depth().best_bid() + a.depth().best_ask());
-                value += a.config_.contract_size * mid * s.position;
+            if constexpr (std::is_same_v<AssetMode, LinearAssetMode>) {
+                // Preserve the existing portfolio API's linear multiplication order.
+                double value = s.balance;
+                if (s.position != 0) value += LinearAssetMode{a.config_.contract_size}.amount(mid(), s.position);
+                total += value - s.fee;
+            } else {
+                // A flat asset can have an empty book. Any positive mark gives its cash equity.
+                total += a.equity(s.position == 0 ? 1.0 : mid());
             }
-            total += value - s.fee;
         }
         return total;
     }

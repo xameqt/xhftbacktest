@@ -8,6 +8,9 @@
 
 namespace xhftbacktest {
 
+struct NoPartialFill {};
+struct PartialFill {};
+
 enum TimeInForce : std::uint8_t { GTC = 0, GTX = 1, FOK = 2, IOC = 3 };
 namespace status {
 enum Code : std::uint8_t { NONE = 0, NEW = 1, EXPIRED = 2, FILLED = 3, CANCELED = 4, PARTIALLY_FILLED = 5 };
@@ -32,6 +35,7 @@ struct Order {
     std::int64_t local_ts;
     double cum_trade_qty{};
     bool maker{};
+    bool execution{};  // A fresh fill report, as opposed to an ack carrying the last exec_qty.
 };
 
 // Orders are contiguous for iteration. active_[i] is the hash bucket of orders_[i].

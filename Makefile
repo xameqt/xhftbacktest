@@ -11,26 +11,31 @@ COMMON := -std=c++20 -Wall -Wextra -Wpedantic -Werror -ffp-contract=off -pthread
 LTO ?= -flto=auto
 export LTO
 RELEASE := -O3 $(LTO) -DNDEBUG
-UBTRAP := -O3 $(LTO) -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS
+UBTRAP := -O3 $(LTO) -fsanitize=undefined -fsanitize-undefined-trap-on-error -D_GLIBCXX_ASSERTIONS
 COMPILE = $(CXX) $(CPPFLAGS) $(CXXFLAGS) -Iinclude $(COMMON)
 BENCH_SRC := bench/bench_parity_and_speed.cpp
+TESTS := test_smoke test_asset_and_recorder test_v02_l2_parity
+vpath test_%.cpp tests bench
 
 .DELETE_ON_ERROR:
-.PHONY: all test bench check python test-multi test-python clean FORCE
+.PHONY: all test bench check python test-multi test-l3 test-v02 test-python clean FORCE
 all: $(BUILD)/test_smoke
 
 $(BUILD):
 	mkdir -p $@
 
-$(BUILD)/test_smoke: tests/test_smoke.cpp $(HEADERS) Makefile | $(BUILD)
+$(BUILD)/test_%: test_%.cpp $(HEADERS) Makefile | $(BUILD)
 	$(COMPILE) $(RELEASE) $< $(LDFLAGS) -o $@
 
-$(BUILD)/test_smoke_ubsan: tests/test_smoke.cpp $(HEADERS) Makefile | $(BUILD)
+$(BUILD)/test_%_ubsan: test_%.cpp $(HEADERS) Makefile | $(BUILD)
 	$(COMPILE) $(UBTRAP) $< $(LDFLAGS) -o $@
 
-test: $(BUILD)/test_smoke $(BUILD)/test_smoke_ubsan
-	./$(BUILD)/test_smoke
-	./$(BUILD)/test_smoke_ubsan
+test: $(addprefix $(BUILD)/,$(TESTS) $(addsuffix _ubsan,$(TESTS)))
+	@set -e; for suffix in '' _ubsan; do \
+		./$(BUILD)/test_smoke$$suffix; \
+		./$(BUILD)/test_asset_and_recorder$$suffix; \
+		./$(BUILD)/test_v02_l2_parity$$suffix --self-test; \
+	done
 
 # Generate constants from the chosen dataset and oracle without a C++ JSON library.
 define READ_BASELINE
@@ -72,7 +77,17 @@ check: $(BUILD)/bench_ubsan
 	./$< $(BUILD)/ubsan_results.json
 
 # Query Python only for targets that use the extension or the Rust reference.
-ifneq ($(filter python test-python test-multi,$(MAKECMDGOALS)),)
+ORACLE_TARGETS := test-multi test-l3 test-v02
+ifneq ($(filter test-python,$(MAKECMDGOALS)),)
+ifneq ($(shell cd "$(DATA_DIR)" 2>/dev/null && { \
+	{ test -f lista_real.bin && test -f lista_real.npz && test -f lista_real_meta.json; } || \
+	{ test -f multi_asset_test/LISTAUSDT.npy && test -f multi_asset_test/CYSUSDT.npy; } || \
+	{ test -n "$(RAW_DATA_DIR)" && test -f lista_real.npz; }; \
+	} && echo yes),)
+ORACLE_TARGETS += test-python
+endif
+endif
+ifneq ($(filter python test-python $(ORACLE_TARGETS),$(MAKECMDGOALS)),)
 PY_RUN := "$(PYTHON)"
 PY_CHECK := import numpy; assert int(numpy.__version__.split(".")[0]) >= 2
 UV_DEPS := --with 'numpy>=2'
@@ -80,7 +95,7 @@ ifneq ($(filter python test-python,$(MAKECMDGOALS)),)
 PY_CHECK += ; import nanobind
 UV_DEPS += --with nanobind
 endif
-ifneq ($(filter test-python test-multi,$(MAKECMDGOALS)),)
+ifneq ($(filter $(ORACLE_TARGETS),$(MAKECMDGOALS)),)
 PY_CHECK += ; import hftbacktest, numba; assert hftbacktest.__version__ == "2.4.4"
 UV_DEPS += --with hftbacktest==2.4.4
 endif
@@ -128,6 +143,12 @@ test-python: python
 
 test-multi:
 	$(PY_RUN) -B bench/test_multi_asset_parity.py
+
+test-l3:
+	$(PY_RUN) -B bench/test_l3_parity.py
+
+test-v02:
+	$(PY_RUN) -B bench/test_v02_l2_parity.py
 
 clean:
 	rm -rf $(BUILD)

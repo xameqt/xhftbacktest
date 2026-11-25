@@ -3,7 +3,9 @@
 #define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #include <numpy/ndarrayobject.h>
 
+#include "xhftbacktest/l3_engine.hpp"
 #include "xhftbacktest/multi_asset.hpp"
+#include "xhftbacktest/recorder.hpp"
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -52,10 +54,17 @@ nb::list order_snapshot(const auto& orders) {
     return result;
 }
 
-template<class Queue>
+template<class Queue, class Fill = NoPartialFill, class Asset = LinearAsset>
+using L2 = Backtest<Queue, ConstantLatency, 64, Fill, Asset>;
+using InverseL2 = L2<RiskAdverseQueueModel, NoPartialFill, InverseAsset>;
+
+// Preserve the settlement convention on the detached Python snapshot.
+struct InverseStateValues : StateValues {};
+
+template<class Engine>
 struct Single {
     EventSource source;
-    Backtest<Queue, ConstantLatency> bt;
+    Engine bt;
 
     template<class Data>
     Single(AssetConfig cfg, Data data, Ns entry, Ns resp)
@@ -89,13 +98,17 @@ struct Multi {
     }
 };
 
-template<class Queue>
+template<class Engine>
 void bind_single(nb::module_& m, const char* name) {
-    using S = Single<Queue>;
-    nb::class_<S>(m, name)
-        .def(nb::init<AssetConfig, Path, Ns, Ns>(), "config"_a, "data"_a, "entry_latency_ns"_a, "resp_latency_ns"_a)
+    using S = Single<Engine>;
+    nb::class_<S> cls(m, name);
+    cls.def(nb::init<AssetConfig, Path, Ns, Ns>(), "config"_a, "data"_a, "entry_latency_ns"_a, "resp_latency_ns"_a)
         .def(nb::init<AssetConfig, nb::object, Ns, Ns>(), "config"_a, "data"_a, "entry_latency_ns"_a, "resp_latency_ns"_a)
-        .def("elapse", [](S& s, Ns ns) { return s.bt.elapse(nonnegative(ns)) == 0; }, "duration_ns"_a)
+        .def("elapse", [](S& s, Ns ns) {
+            const int result = s.bt.elapse(nonnegative(ns));
+            if (result == 2) throw nb::value_error("invalid L3 feed order or exhausted book capacity");
+            return result == 0;
+        }, "duration_ns"_a)
         .def_prop_ro("current_timestamp", [](const S& s) { return s.bt.current_timestamp(); })
         .def_prop_ro("position", [](const S& s) { return s.bt.position(); })
         .def_prop_ro("best_bid", [](const S& s) { return s.bt.depth().best_bid(); })
@@ -104,7 +117,10 @@ void bind_single(nb::module_& m, const char* name) {
         .def_prop_ro("best_ask_tick", [](const S& s) { return s.bt.depth().best_ask_tick(); })
         .def("bid_qty_at_tick", [](const S& s, Ns tick) { return s.bt.depth().bid_qty_at_tick(tick); }, "tick"_a)
         .def("ask_qty_at_tick", [](const S& s, Ns tick) { return s.bt.depth().ask_qty_at_tick(tick); }, "tick"_a)
-        .def_prop_ro("state_values", [](const S& s) { return s.bt.state_values(); })
+        .def_prop_ro("state_values", [](const S& s) {
+            if constexpr (std::is_same_v<Engine, InverseL2>) return InverseStateValues{s.bt.state_values()};
+            else return s.bt.state_values();
+        })
         .def("submit_buy_order", [](S& s, Id id, double px, double qty, TimeInForce tif) {
             return s.bt.submit_buy_order(id, px, qty, tif);
         }, "order_id"_a, "price"_a, "qty"_a, "tif"_a)
@@ -112,9 +128,15 @@ void bind_single(nb::module_& m, const char* name) {
             return s.bt.submit_sell_order(id, px, qty, tif);
         }, "order_id"_a, "price"_a, "qty"_a, "tif"_a)
         .def("cancel", [](S& s, Id id) { return s.bt.cancel(id); }, "order_id"_a)
+        .def("modify", [](S& s, Id id, double px, double qty) { return s.bt.modify(id, px, qty); },
+             "order_id"_a, "price"_a, "qty"_a)
         .def("clear_inactive_orders", [](S& s) { s.bt.clear_inactive_orders(); })
         .def_prop_ro("active_orders", [](const S& s) { return order_snapshot(s.bt.orders()); },
                      "Snapshot of retained orders, including terminal orders until cleared.");
+    if constexpr (requires(Engine& bt) { bt.apply_funding(0., 0.); }) {
+        cls.def("apply_funding", [](S& s, double rate, double mark) { s.bt.apply_funding(rate, mark); },
+                "funding_rate"_a, "mark_price"_a);
+    }
 }
 
 template<class Queue>
@@ -142,15 +164,26 @@ void bind_multi(nb::module_& m, const char* name) {
             return m.bt.submit_sell_order(m.index(i), id, px, qty, tif);
         }, "i"_a, "order_id"_a, "price"_a, "qty"_a, "tif"_a)
         .def("cancel", [](M& m, std::size_t i, Id id) { return m.bt.cancel(m.index(i), id); }, "i"_a, "order_id"_a)
+        .def("modify", [](M& m, std::size_t i, Id id, double px, double qty) {
+            return m.bt.modify(m.index(i), id, px, qty);
+        }, "i"_a, "order_id"_a, "price"_a, "qty"_a)
+        .def("apply_funding", [](M& m, std::size_t i, double rate, double mark) {
+            m.bt.apply_funding(m.index(i), rate, mark);
+        }, "i"_a, "funding_rate"_a, "mark_price"_a)
         .def("clear_inactive_orders", [](M& m, std::size_t i) { m.bt.clear_inactive_orders(m.index(i)); }, "i"_a)
         .def("active_orders", [](const M& m, std::size_t i) { return order_snapshot(m.bt.orders(m.index(i))); }, "i"_a)
         .def("total_equity", [](const M& m) { return m.bt.total_equity(); });
+}
+
+template<class State, class Asset>
+bool record(Recorder& r, Ns ts, double mid, const State& s, double contract_size) {
+    return r.record(ts, mid, s, Asset{contract_size});
 }
 } // namespace
 
 NB_MODULE(xhftbacktest, m) {
     if (PyArray_ImportNumPyAPI() < 0) throw nb::python_error();
-    m.doc() = "Zero-copy L2 event replay with constant order latency.";
+    m.doc() = "Zero-copy L2 and L3 event replay with constant order latency.";
     nb::enum_<TimeInForce>(m, "TimeInForce")
         .value("GTC", GTC).value("GTX", GTX).value("FOK", FOK).value("IOC", IOC);
     nb::enum_<status::Code>(m, "OrderStatus")
@@ -178,6 +211,7 @@ NB_MODULE(xhftbacktest, m) {
         .def_ro("num_trades", &StateValues::num_trades)
         .def_ro("trading_volume", &StateValues::trading_volume)
         .def_ro("trading_value", &StateValues::trading_value);
+    nb::class_<InverseStateValues, StateValues>(m, "_InverseStateValues");
     nb::class_<Order>(m, "Order")
         .def_ro("order_id", &Order::order_id)
         .def_ro("price_tick", &Order::price_tick)
@@ -195,8 +229,34 @@ NB_MODULE(xhftbacktest, m) {
         .def_ro("cum_trade_qty", &Order::cum_trade_qty)
         .def_ro("maker", &Order::maker);
 
-    bind_single<RiskAdverseQueueModel>(m, "BacktestRiskAdverse");
-    bind_single<PowerProbQueueModel<3>>(m, "BacktestPowerProb");
+    nb::class_<SummaryStats>(m, "SummaryStats")
+        .def_ro("total_return", &SummaryStats::total_return)
+        .def_ro("annualized_sharpe", &SummaryStats::annualized_sharpe)
+        .def_ro("annualized_sortino", &SummaryStats::annualized_sortino)
+        .def_ro("max_drawdown", &SummaryStats::max_drawdown)
+        .def_ro("return_over_mdd", &SummaryStats::return_over_mdd)
+        .def_ro("num_trades", &SummaryStats::num_trades)
+        .def_ro("total_volume", &SummaryStats::total_volume)
+        .def_ro("total_value", &SummaryStats::total_value)
+        .def_ro("total_fee", &SummaryStats::total_fee)
+        .def_ro("final_equity", &SummaryStats::final_equity);
+    nb::class_<Recorder>(m, "Recorder")
+        .def(nb::init<std::size_t>(), "capacity"_a)
+        .def("record", &record<InverseStateValues, InverseAsset>,
+             "ts"_a, "mid"_a, "state_values"_a, "contract_size"_a = 1.)
+        .def("record", &record<StateValues, LinearAsset>,
+             "ts"_a, "mid"_a, "state_values"_a, "contract_size"_a = 1.,
+             "Record equity using the snapshot's asset model. Return False when full.")
+        .def("summary", &Recorder::summary, "trading_days_per_year"_a = 365.)
+        .def("write_csv", &Recorder::write_csv, "path"_a)
+        .def("size", &Recorder::size);
+
+    bind_single<L2<RiskAdverseQueueModel>>(m, "BacktestRiskAdverse");
+    bind_single<L2<PowerProbQueueModel<3>>>(m, "BacktestPowerProb");
+    bind_single<L2<RiskAdverseQueueModel, PartialFill>>(m, "BacktestPartialRiskAdverse");
+    bind_single<L2<PowerProbQueueModel<3>, PartialFill>>(m, "BacktestPartialPowerProb");
+    bind_single<InverseL2>(m, "BacktestInverseRiskAdverse");
+    bind_single<L3Backtest<ConstantLatency>>(m, "L3Backtest");
     bind_multi<RiskAdverseQueueModel>(m, "MultiAssetRiskAdverse");
     bind_multi<PowerProbQueueModel<3>>(m, "MultiAssetPowerProb");
 }
