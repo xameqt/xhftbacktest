@@ -1,0 +1,22 @@
+{
+  "n_events":1499984,
+  "models":{
+    "risk_adverse": {
+      "elapsed_s":[0.033351232000000001,0.033426934999999998,0.033211561000000001],
+      "final_state":{"position":-100,"balance":7.1290000000000164,"fee":-0.1649096699999999,"num_trades":751,"trading_volume":75100,"equity_at_last_mid":-0.1155903299999832,"final_mid":0.074094999999999994},
+      "hot_allocations":0,
+      "best":{"elapsed_s":0.033211561000000001,"events_per_sec":45164513.646317318,"ns_per_event":22.141276840286295},
+      "median":{"elapsed_s":0.033351232000000001,"events_per_sec":44975370.025311209,"ns_per_event":22.234391833512891},
+      "speedup_vs_rust_median":2.5755186797262684
+    },
+    "power_prob": {
+      "elapsed_s":[0.034437561999999998,0.034216990000000003,0.033881925],
+      "final_state":{"position":-100,"balance":7.1030000000000166,"fee":-0.16622306999999997,"num_trades":757,"trading_volume":75700,"equity_at_last_mid":-0.14027692999998292,"final_mid":0.074094999999999994},
+      "hot_allocations":0,
+      "best":{"elapsed_s":0.033881925,"events_per_sec":44270920.262057126,"ns_per_event":22.588190940703367},
+      "median":{"elapsed_s":0.034216990000000003,"events_per_sec":43837403.582255475,"ns_per_event":22.811569990079896},
+      "speedup_vs_rust_median":2.5436871274681239
+    }
+  },
+  "sweep":{"workers":20,"configs":20,"queue_model":"risk_adverse","elapsed_s":0.119364025,"events_per_sec":251329326.40299287,"hot_allocations":0}
+}

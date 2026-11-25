@@ -1,0 +1,59 @@
+{
+  "hftbacktest_version": "2.4.4",
+  "n_events": 1499984,
+  "skew_ticks_per_unit": 0.01,
+  "models": {
+    "risk_adverse": {
+      "elapsed_s": [
+        0.0846608649881091,
+        0.08667007999611087,
+        0.08589672100788448
+      ],
+      "final_state": {
+        "position": -100.0,
+        "balance": 7.129000000000016,
+        "fee": -0.1649096699999999,
+        "num_trades": 751,
+        "trading_volume": 75100.0,
+        "equity_at_last_mid": -0.1155903299999832,
+        "final_mid": 0.074095
+      },
+      "best": {
+        "elapsed_s": 0.0846608649881091,
+        "events_per_sec": 17717560.53060263,
+        "ns_per_event": 56.44117869797884
+      },
+      "median": {
+        "elapsed_s": 0.08589672100788448,
+        "events_per_sec": 17462645.633030813,
+        "ns_per_event": 57.26509149956564
+      }
+    },
+    "power_prob": {
+      "elapsed_s": [
+        0.08703731700370554,
+        0.08637718000682071,
+        0.08713984700443689
+      ],
+      "final_state": {
+        "position": -100.0,
+        "balance": 7.103000000000017,
+        "fee": -0.16622306999999997,
+        "num_trades": 757,
+        "trading_volume": 75700.0,
+        "equity_at_last_mid": -0.14027692999998292,
+        "final_mid": 0.074095
+      },
+      "best": {
+        "elapsed_s": 0.08637718000682071,
+        "events_per_sec": 17365512.510150887,
+        "ns_per_event": 57.58540091549024
+      },
+      "median": {
+        "elapsed_s": 0.08703731700370554,
+        "events_per_sec": 17233803.288492218,
+        "ns_per_event": 58.02549694110439
+      }
+    }
+  }
+}

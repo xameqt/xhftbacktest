@@ -1,0 +1,8 @@
+/build/
+/bench/data/
+*.bin
+*.npy
+*.npz
+__pycache__/
+*.py[cod]
+.venv/
